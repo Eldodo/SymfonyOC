@@ -210,7 +210,7 @@ return $this->started;
 }
 public function setOptions(array $options)
 {
-$validOptions = array_flip(array('cache_limiter','cookie_domain','cookie_httponly','cookie_lifetime','cookie_path','cookie_secure','entropy_file','entropy_length','gc_divisor','gc_maxlifetime','gc_probability','hash_bits_per_character','hash_function','name','referer_check','serialize_handler','use_strict_mode','use_cookies','use_only_cookies','use_trans_sid','upload_progress.enabled','upload_progress.cleanup','upload_progress.prefix','upload_progress.name','upload_progress.freq','upload_progress.min-freq','url_rewriter.tags',
+$validOptions = array_flip(array('cache_limiter','cookie_domain','cookie_httponly','cookie_lifetime','cookie_path','cookie_secure','entropy_file','entropy_length','gc_divisor','gc_maxlifetime','gc_probability','hash_bits_per_character','hash_function','name','referer_check','serialize_handler','use_strict_mode','use_cookies','use_only_cookies','use_trans_sid','upload_progress.enabled','upload_progress.cleanup','upload_progress.prefix','upload_progress.name','upload_progress.freq','upload_progress.min-freq','url_rewriter.tags','sid_length','sid_bits_per_character','trans_sid_hosts','trans_sid_tags',
 ));
 foreach ($options as $key => $value) {
 if (isset($validOptions[$key])) {
@@ -945,7 +945,7 @@ trait ApcuTrait
 {
 public static function isSupported()
 {
-return function_exists('apcu_fetch') && ini_get('apc.enabled') && !('cli'=== PHP_SAPI && !ini_get('apc.enable_cli'));
+return function_exists('apcu_fetch') && ini_get('apc.enabled');
 }
 private function init($namespace, $defaultLifetime, $version)
 {
@@ -967,7 +967,7 @@ apcu_add($version.'@'.$namespace, null);
 protected function doFetch(array $ids)
 {
 try {
-return apcu_fetch($ids);
+return apcu_fetch($ids) ?: array();
 } catch (\Error $e) {
 throw new \ErrorException($e->getMessage(), $e->getCode(), E_ERROR, $e->getFile(), $e->getLine());
 }
@@ -978,7 +978,7 @@ return apcu_exists($id);
 }
 protected function doClear($namespace)
 {
-return isset($namespace[0]) && class_exists('APCuIterator', false)
+return isset($namespace[0]) && class_exists('APCuIterator', false) && ('cli'!== PHP_SAPI || ini_get('apc.enable_cli'))
 ? apcu_delete(new \APCuIterator(sprintf('/^%s/', preg_quote($namespace,'/')), APC_ITER_KEY))
 : apcu_clear_cache();
 }
@@ -992,7 +992,10 @@ return true;
 protected function doSave(array $values, $lifetime)
 {
 try {
-return array_keys(apcu_store($values, null, $lifetime));
+if (false === $failures = apcu_store($values, null, $lifetime)) {
+$failures = $values;
+}
+return array_keys($failures);
 } catch (\Error $e) {
 } catch (\Exception $e) {
 }
@@ -1008,6 +1011,7 @@ namespace Symfony\Component\Cache\Adapter
 use Psr\Cache\CacheItemInterface;
 use Psr\Log\LoggerAwareInterface;
 use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Symfony\Component\Cache\CacheItem;
 use Symfony\Component\Cache\Exception\InvalidArgumentException;
 use Symfony\Component\Cache\Traits\AbstractTrait;
@@ -1079,7 +1083,9 @@ if (!self::$apcuSupported) {
 return $fs;
 }
 $apcu = new ApcuAdapter($namespace, (int) $defaultLifetime / 5, $version);
-if (null !== $logger) {
+if ('cli'=== PHP_SAPI && !ini_get('apc.enable_cli')) {
+$apcu->setLogger(new NullLogger());
+} elseif (null !== $logger) {
 $apcu->setLogger($logger);
 }
 return new ChainAdapter(array($apcu, $fs));
@@ -2162,7 +2168,7 @@ return $this->mergeDefaults($attributes, $route->getDefaults());
 }
 protected function handleRouteRequirements($pathinfo, $name, Route $route)
 {
-if ($route->getCondition() && !$this->getExpressionLanguage()->evaluate($route->getCondition(), array('context'=> $this->context,'request'=> $this->request))) {
+if ($route->getCondition() && !$this->getExpressionLanguage()->evaluate($route->getCondition(), array('context'=> $this->context,'request'=> $this->request ?: $this->createRequest($pathinfo)))) {
 return array(self::REQUIREMENT_MISMATCH, null);
 }
 $scheme = $this->context->getScheme();
@@ -2187,6 +2193,14 @@ throw new \RuntimeException('Unable to use expressions as the Symfony Expression
 $this->expressionLanguage = new ExpressionLanguage(null, $this->expressionLanguageProviders);
 }
 return $this->expressionLanguage;
+}
+protected function createRequest($pathinfo)
+{
+if (!class_exists('Symfony\Component\HttpFoundation\Request')) {
+return null;
+}
+return Request::create($this->context->getScheme().'://'.$this->context->getHost().$this->context->getBaseUrl().$pathinfo, $this->context->getMethod(), $this->context->getParameters(), array(), array(), array('SCRIPT_FILENAME'=> $this->context->getBaseUrl(),'SCRIPT_NAME'=> $this->context->getBaseUrl(),
+));
 }
 }
 }
@@ -2215,7 +2229,7 @@ return $parameters;
 }
 protected function handleRouteRequirements($pathinfo, $name, Route $route)
 {
-if ($route->getCondition() && !$this->getExpressionLanguage()->evaluate($route->getCondition(), array('context'=> $this->context,'request'=> $this->request))) {
+if ($route->getCondition() && !$this->getExpressionLanguage()->evaluate($route->getCondition(), array('context'=> $this->context,'request'=> $this->request ?: $this->createRequest($pathinfo)))) {
 return array(self::REQUIREMENT_MISMATCH, null);
 }
 $scheme = $this->context->getScheme();
@@ -4697,7 +4711,16 @@ protected function createController($controller)
 if (false === strpos($controller,'::') && 2 === substr_count($controller,':')) {
 $controller = $this->parser->parse($controller);
 }
-return parent::createController($controller);
+$resolvedController = parent::createController($controller);
+if (1 === substr_count($controller,':') && is_array($resolvedController)) {
+if ($resolvedController[0] instanceof ContainerAwareInterface) {
+$resolvedController[0]->setContainer($this->container);
+}
+if ($resolvedController[0] instanceof AbstractController && null !== $previousContainer = $resolvedController[0]->setContainer($this->container)) {
+$resolvedController[0]->setContainer($previousContainer);
+}
+}
+return $resolvedController;
 }
 protected function instantiateController($class)
 {
@@ -5240,11 +5263,11 @@ namespace
 {
 class Twig_Environment
 {
-const VERSION ='1.34.2';
-const VERSION_ID = 13402;
+const VERSION ='1.34.4';
+const VERSION_ID = 13404;
 const MAJOR_VERSION = 1;
 const MINOR_VERSION = 34;
-const RELEASE_VERSION = 2;
+const RELEASE_VERSION = 4;
 const EXTRA_VERSION ='';
 protected $charset;
 protected $loader;
@@ -6077,7 +6100,6 @@ class_alias('Twig_Environment','Twig\Environment', false);
 }
 namespace
 {
-class_exists('Twig_Environment');
 interface Twig_ExtensionInterface
 {
 public function initRuntime(Twig_Environment $environment);
@@ -6091,10 +6113,10 @@ public function getGlobals();
 public function getName();
 }
 class_alias('Twig_ExtensionInterface','Twig\Extension\ExtensionInterface', false);
+class_exists('Twig_Environment');
 }
 namespace
 {
-class_exists('Twig_Environment');
 abstract class Twig_Extension implements Twig_ExtensionInterface
 {
 public function initRuntime(Twig_Environment $environment)
@@ -6134,6 +6156,7 @@ return get_class($this);
 }
 }
 class_alias('Twig_Extension','Twig\Extension\AbstractExtension', false);
+class_exists('Twig_Environment');
 }
 namespace
 {
@@ -8822,7 +8845,7 @@ $this->saveCacheFile($path, $annot);
 return $this->loadedAnnotations[$key] = $annot;
 }
 if ($this->debug
-&& (false !== $filename = $class->getFilename())
+&& (false !== $filename = $class->getFileName())
 && filemtime($path) < filemtime($filename)) {
 @unlink($path);
 $annot = $this->reader->getClassAnnotations($class);
@@ -8892,6 +8915,7 @@ $tempfile = tempnam($this->dir, uniqid('', true));
 if (false === $tempfile) {
 throw new \RuntimeException(sprintf('Unable to create tempfile in directory: %s', $this->dir));
 }
+@chmod($tempfile, 0666 & (~$this->umask));
 $written = file_put_contents($tempfile,'<?php return unserialize('.var_export(serialize($data), true).');');
 if (false === $written) {
 throw new \RuntimeException(sprintf('Unable to write cached file to: %s', $tempfile));
@@ -8948,7 +8972,7 @@ public function parseClass(\ReflectionClass $class)
 if (method_exists($class,'getUseStatements')) {
 return $class->getUseStatements();
 }
-if (false === $filename = $class->getFilename()) {
+if (false === $filename = $class->getFileName()) {
 return array();
 }
 $content = $this->getFileContent($filename, $class->getStartLine());
@@ -9210,7 +9234,10 @@ return;
 }
 $manager->setProxyInitializer(\Closure::bind(
 function (&$wrappedInstance, LazyLoadingInterface $manager) use ($name) {
-if (isset($this->aliases[$name = strtolower($name)])) {
+if (isset($this->normalizedIds[$normalizedId = strtolower($name)])) {
+$name = $this->normalizedIds[$normalizedId];
+}
+if (isset($this->aliases[$name])) {
 $name = $this->aliases[$name];
 }
 $method = !isset($this->methodMap[$name]) ?'get'.strtr($name, $this->underscoreMap).'Service': $this->methodMap[$name];

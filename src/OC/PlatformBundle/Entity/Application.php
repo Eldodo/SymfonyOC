@@ -25,7 +25,7 @@ class Application
      *@ORM\ManyToOne(targetEntity="OC\PlatformBundle\Entity\advert")
      *@ORM\JoinColumn(nullable=false)
      */
-    private $advert
+    private $advert;
     
     /**
      * @var string
@@ -134,5 +134,28 @@ class Application
     {
         return $this->date;
     }
-}
 
+    /**
+     * Set advert
+     *
+     * @param \OC\PlatformBundle\Entity\advert $advert
+     *
+     * @return Application
+     */
+    public function setAdvert(\OC\PlatformBundle\Entity\advert $advert)
+    {
+        $this->advert = $advert;
+
+        return $this;
+    }
+
+    /**
+     * Get advert
+     *
+     * @return \OC\PlatformBundle\Entity\advert
+     */
+    public function getAdvert()
+    {
+        return $this->advert;
+    }
+}

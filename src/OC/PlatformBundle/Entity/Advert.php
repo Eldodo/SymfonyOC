@@ -2,6 +2,7 @@
 
 namespace OC\PlatformBundle\Entity;
 
+use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\ORM\Mapping as ORM;
 
 /**
@@ -24,6 +25,11 @@ class Advert
      * @ORM\GeneratedValue(strategy="AUTO")
      */
     private $id;
+    /**
+     * @ORM\ManyToMany(targetEntity="OC\PlatformBundle\Entity\Category", cascade={"persist"})
+     * @ORM\JoinTable(name="advert_category")
+     */
+    private $categories;
 
     /**
      * @var \DateTime
@@ -58,16 +64,17 @@ class Advert
    */
   private $published = true;
   
+
+    
+    public function __construct(){
+        $this->date = new \DateTime();
+        $this->categories = new ArrayCollection();
+    }
     /**
      * Get id
      *
      * @return int
      */
-    
-    public function __construct(){
-        $this->date = new \DateTime();
-    }
-     
     public function getId()
     {
         return $this->id;
@@ -216,4 +223,16 @@ class Advert
     {
         return $this->image;
     }
+    public function addCategory(Category $category){
+        $this->categories[] = $category;
+    }
+
+    public function removeCategory(Category $category){
+        $this->categories->removeElement($category);
+    }
+
+    public function getCategories(){
+        return $this->categories;
+    }
 }
+
